@@ -1,0 +1,65 @@
+name: 'Setup Amber Odin'
+description: 'Install the Odin compiler on Ubuntu runners from the Amber Linux apt archive — no source build, GPG-verified.'
+author: 'Hyperquader'
+
+branding:
+  icon: 'download'
+  color: 'orange'
+
+inputs:
+  version:
+    description: >-
+      amber-odin version to install, e.g. 2026.08+dev-1. Leave empty for the
+      newest in the archive. Pin this if a build must be reproducible.
+    required: false
+    default: ''
+  ols:
+    description: 'Also install amber-ols, the Odin language server.'
+    required: false
+    default: 'false'
+
+outputs:
+  odin-version:
+    description: 'The `odin version` string of the installed compiler.'
+    value: ${{ steps.install.outputs.odin-version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # signed-by pins apt to the Amber Linux Archive Signing Key
+        # (481A11AA548332196B290D09C5B067A799C43065) alone.
+        KEYRING=/usr/share/keyrings/amberlinux-archive-keyring.gpg
+        sudo install -d -m0755 /usr/share/keyrings
+        sudo curl -fsSL --retry 3 --retry-delay 2 -o "$KEYRING" \
+          https://apt.amberlinux.org/amberlinux-archive-keyring.gpg
+        echo "deb [arch=amd64 signed-by=$KEYRING] https://apt.amberlinux.org amber main" \
+          | sudo tee /etc/apt/sources.list.d/amberlinux.list >/dev/null
+
+        # Update only this list; leave the runner's own indexes alone.
+        sudo apt-get update -o Dir::Etc::sourcelist=sources.list.d/amberlinux.list \
+                            -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+
+        pkgs=(amber-odin)
+        if [ -n "${{ inputs.version }}" ]; then
+          pkgs=("amber-odin=${{ inputs.version }}")
+        fi
+        if [ "${{ inputs.ols }}" = "true" ]; then
+          pkgs+=(amber-ols)
+        fi
+
+        # amber-odin Depends: clang — the compiler shells out to it for linking.
+        sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
+
+        # Fail here, not at the caller's first `odin build`.
+        if ! command -v odin >/dev/null; then
+          echo "::error::amber-odin installed but odin is not on PATH" >&2
+          exit 1
+        fi
+        ver="$(odin version)"
+        echo "odin-version=$ver" >> "$GITHUB_OUTPUT"
+        echo "::notice::$ver"
