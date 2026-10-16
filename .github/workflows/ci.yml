@@ -1,0 +1,88 @@
+name: ci
+
+# The action can break without changing: the archive, its key or the monthly amber-odin
+# release move under it. So it runs weekly as well as on every push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Makefile's own list (DEPS), not a second one here: a package missing on the runner
+      # is added there.
+      - name: system packages
+        run: sudo apt-get update && make deps APT_FLAGS=-y
+
+      - run: make ci
+
+  # The default path on GitHub's own runner, and the version output.
+  default:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      package: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./
+        id: odin
+      - name: the odin-version output is set
+        run: test -n "${{ steps.odin.outputs.odin-version }}"
+      - run: scripts/hello.sh
+      - name: the package version, for the pinned job
+        id: package
+        run: echo "version=$(dpkg-query -W -f='${Version}' amber-odin)" >> "$GITHUB_OUTPUT"
+
+  # `version:` pinned to what the archive holds today, and `ols: 'true'`, which brings ols and
+  # odinfmt.
+  pinned-with-ols:
+    needs: default
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./
+        with:
+          version: ${{ needs.default.outputs.package }}
+          ols: "true"
+      - name: the pinned version is the one installed
+        run: test "$(dpkg-query -W -f='${Version}' amber-odin)" = "${{ needs.default.outputs.package }}"
+      - run: ols version
+      # amber-ols carries the formatter too: an unindented line comes back indented.
+      - name: odinfmt formats a file
+        run: |
+          printf 'package main\nmain :: proc() {\nx := 1\n_ = x\n}\n' | odinfmt -stdin | grep -q "$(printf '\tx := 1')"
+      - run: scripts/hello.sh
+
+  # A machine with no package indexes of its own, as a fresh container or a restarted
+  # self-hosted runner is: clang, which amber-odin depends on, must still be found. The
+  # image has no sudo, curl or certificates, which the action needs of any runner, so they are
+  # installed first and the indexes that install fetched are removed again.
+  cold:
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 10
+    steps:
+      - name: what the action needs, then no indexes
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends sudo curl ca-certificates
+          rm -rf /var/lib/apt/lists/*
+          test -z "$(apt-cache policy clang | grep 'Candidate:' | grep -v '(none)')"
+      - uses: actions/checkout@v5
+
+      - uses: ./
+      - run: scripts/hello.sh

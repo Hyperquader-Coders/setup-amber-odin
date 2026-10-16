@@ -1,0 +1,10 @@
+# Nothing is built here; the action is action.yml plus docs. The suite's build
+# folders are ignored all the same: build/ for what a build makes, dist/ for
+# finished packages, out/ for what a program writes while it runs.
+/build/
+/dist/
+/out/
+
+# Agent files are local and are not shared.
+.claude/
+.mcp.json
